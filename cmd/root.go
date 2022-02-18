@@ -16,6 +16,7 @@ limitations under the License.
 package cmd
 
 import (
+	"github.com/paulfarver/valet/internal/rest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -24,7 +25,8 @@ import (
 var cfgFile string
 
 type Config struct {
-	Log LogConfig `mapstructure:"log"`
+	Log  LogConfig   `mapstructure:"log"`
+	Rest rest.Config `mapstructure:"rest"`
 }
 
 type LogConfig struct {
