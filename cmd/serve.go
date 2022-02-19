@@ -76,7 +76,9 @@ func serverLifecycle(lifecycle fx.Lifecycle, s fx.Shutdowner, l *logrus.Logger, 
 			go func() {
 				if err := server.Start(); err != nil {
 					l.WithError(err).Error("failed to start server")
-					s.Shutdown()
+					if err := s.Shutdown(); err != nil {
+						l.WithError(err).Fatal("failed to shutdown server")
+					}
 				}
 			}()
 			return nil

@@ -73,7 +73,7 @@ func (s *Service) GetReleasers(ctx context.Context, installation *github.Install
 	}
 	releasers := []*Releaser{}
 	for _, repo := range response.Repositories {
-		releaser, err := s.NewReleaser(ctx, client, repo)
+		releaser, err := s.NewReleaser(ctx, client, repo, s.log)
 		if err != nil {
 			s.log.WithError(err).WithField("repo", repo.GetFullName()).Warn("Failed to create releaser")
 			continue
