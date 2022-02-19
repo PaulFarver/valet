@@ -5,6 +5,9 @@ import (
 	"fmt"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"github.com/paulfarver/valet/internal/github"
+	v1 "github.com/paulfarver/valet/internal/rest/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -18,12 +21,11 @@ type Server struct {
 	config Config
 }
 
-func NewServer(conf Config, logger *logrus.Logger) (*Server, error) {
+func NewServer(conf Config, logger *logrus.Logger, svc *github.Service) (*Server, error) {
 	e := echo.New()
 
-	// e.HideBanner = true
-	// e.HidePort = true
-	// e.Validator = validator.New()
+	e.HideBanner = true
+	e.HidePort = true
 
 	// prometheusMiddleware, err := xmid.PrometheusWithConfig(xmid.PrometheusConfig{
 	// 	Registerer: prom,
@@ -32,12 +34,12 @@ func NewServer(conf Config, logger *logrus.Logger) (*Server, error) {
 	// 	return nil, err
 	// }
 
-	// e.Use(
-	// 	middleware.Recover(),
-	// 	prometheusMiddleware,
-	// 	middleware.CORSWithConfig(middleware.CORSConfig{
-	// 		AllowOrigins: []string{"*"},
-	// 	}),
+	e.Use(
+		middleware.Recover(),
+		// 	prometheusMiddleware,
+		middleware.CORSWithConfig(middleware.CORSConfig{
+			AllowOrigins: []string{"*"},
+		}),
 	// 	xmid.RequestIDWithConfig(xmid.RequestIDConfig{
 	// 		Generator: middleware.DefaultRequestIDConfig.Generator,
 	// 		Header:    "X-Trace-ID",
@@ -47,11 +49,12 @@ func NewServer(conf Config, logger *logrus.Logger) (*Server, error) {
 	// 		Level:   gzipCompressionLevel,
 	// 		Skipper: middleware.DefaultGzipConfig.Skipper,
 	// 	}),
-	// )
+	)
 
+	root := e.Group("/v1")
 	// root := e.Group("/books")
 
-	// v1.Register(root, logger, bookService)
+	v1.Register(root, logger, svc)
 
 	return &Server{
 		echo:   e,

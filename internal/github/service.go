@@ -1,9 +1,11 @@
 package github
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/google/go-github/v42/github"
 	"github.com/pkg/errors"
 )
 
@@ -22,9 +24,15 @@ func NewService(conf Config) (*Service, error) {
 		return nil, errors.Wrap(err, "Failed to create ghinstallation.AppsTransport")
 	}
 
-	ghinstallation.NewFromAppsTransport(atr, 0)
-
 	return &Service{
 		atr: atr,
 	}, nil
+}
+
+func (s *Service) ListInstallations(ctx context.Context) ([]*github.Installation, error) {
+	res, _, err := github.NewClient(&http.Client{Transport: s.atr}).Apps.ListInstallations(ctx, &github.ListOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to list installations")
+	}
+	return res, nil
 }

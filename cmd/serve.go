@@ -18,6 +18,7 @@ package cmd
 import (
 	"context"
 
+	"github.com/paulfarver/valet/internal/github"
 	"github.com/paulfarver/valet/internal/rest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -52,16 +53,24 @@ func serve(cmd *cobra.Command, args []string) {
 
 	app := fx.New(
 		fx.WithLogger(fxrus.NewLogger(logger.WithField("entrypoint", "serve"))),
-		fx.Supply(logger),
+		fx.Supply(
+			logger,
+			conf.Rest,
+			conf.Github,
+		),
 
-		fx.Provide(rest.NewServer),
+		fx.Provide(
+			rest.NewServer,
+			github.NewService,
+		),
+
 		fx.Invoke(serverLifecycle),
 	)
 
 	app.Run()
 }
 
-func serverLifecycle(lifecycle fx.Lifecycle, s fx.Shutdowner, l *logrus.Logger, conf Config, server *rest.Server) {
+func serverLifecycle(lifecycle fx.Lifecycle, s fx.Shutdowner, l *logrus.Logger, server *rest.Server) {
 	lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go func() {

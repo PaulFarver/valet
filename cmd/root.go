@@ -16,6 +16,7 @@ limitations under the License.
 package cmd
 
 import (
+	"github.com/paulfarver/valet/internal/github"
 	"github.com/paulfarver/valet/internal/rest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -25,8 +26,9 @@ import (
 var cfgFile string
 
 type Config struct {
-	Log  LogConfig   `mapstructure:"log"`
-	Rest rest.Config `mapstructure:"rest"`
+	Log    LogConfig     `mapstructure:"log"`
+	Rest   rest.Config   `mapstructure:"rest"`
+	Github github.Config `mapstructure:"github"`
 }
 
 type LogConfig struct {
@@ -57,16 +59,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.valet.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 // initConfig reads in config file and ENV variables if set.
