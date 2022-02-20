@@ -18,6 +18,7 @@ package cmd
 import (
 	"context"
 
+	"github.com/paulfarver/valet/internal/chart"
 	"github.com/paulfarver/valet/internal/github"
 	"github.com/paulfarver/valet/internal/rest"
 	"github.com/sirupsen/logrus"
@@ -62,6 +63,7 @@ func serve(cmd *cobra.Command, args []string) {
 		fx.Provide(
 			rest.NewServer,
 			github.NewService,
+			chart.NewServiceMock,
 		),
 
 		fx.Invoke(serverLifecycle),

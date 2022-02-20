@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"strings"
 
 	"github.com/Jeffail/gabs/v2"
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v42/github"
+	"github.com/paulfarver/valet/internal/chart"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -22,26 +24,35 @@ type ReleaserConfig struct {
 }
 
 type RuleConfig struct {
-	Branch string `yaml:"branch"`
-	Files  string `yaml:"files"`
+	Branch   string `yaml:"branch"`
+	Files    string `yaml:"files"`
+	Strategy string `yaml:"strategy"`
 }
 
 type Rule struct {
-	Branch string
-	Files  *regexp.Regexp
-	Indent int
+	Branch   string
+	Files    *regexp.Regexp
+	Indent   int
+	Strategy string // Has no effect yet. TODO: implement
 }
+
+const (
+	StrategyPullRequest = "pull-request"
+	StrategyDirect      = "direct"
+)
 
 var ErrFileMissing = errors.New("File missing in repository")
 
+// Releaser is a configured client for updating files in a repository
 type Releaser struct {
-	Client     *github.Client
-	Repository *github.Repository
-	Rules      []Rule
-	log        logrus.FieldLogger
+	Client       *github.Client
+	Repository   *github.Repository
+	Rules        []Rule
+	log          logrus.FieldLogger
+	chartService chart.Service
 }
 
-func (s *Service) NewReleaser(ctx context.Context, client *github.Client, repo *github.Repository, log logrus.FieldLogger) (*Releaser, error) {
+func (s *Service) NewReleaser(ctx context.Context, client *github.Client, repo *github.Repository, log logrus.FieldLogger, chartService chart.Service) (*Releaser, error) {
 	l := log.WithField("repository", repo.GetFullName()).WithField("component", "releaser")
 
 	file := s.config.ReleaseConfigPath
@@ -74,10 +85,11 @@ func (s *Service) NewReleaser(ctx context.Context, client *github.Client, repo *
 	}
 
 	return &Releaser{
-		Client:     client,
-		Repository: repo,
-		Rules:      rules,
-		log:        l,
+		Client:       client,
+		Repository:   repo,
+		Rules:        rules,
+		log:          l,
+		chartService: chartService,
 	}, nil
 }
 
@@ -89,8 +101,9 @@ func readRules(ruleConfigs []RuleConfig) ([]Rule, error) {
 			return nil, errors.Wrapf(err, "Failed to compile files regexp %s", r.Files)
 		}
 		rules = append(rules, Rule{
-			Branch: r.Branch,
-			Files:  files,
+			Branch:   r.Branch,
+			Files:    files,
+			Strategy: r.Strategy,
 		})
 	}
 	return rules, nil
@@ -124,16 +137,6 @@ func (r *Releaser) ScanAndUpdateWithRule(ctx context.Context, rule Rule) error {
 				if err := r.UpdateFile(ctx, entry, ref); err != nil {
 					r.log.WithError(err).Warn("Failed to update file")
 				}
-				// // content := base64.StdEncoding.EncodeToString([]byte("hello"))
-				// _, _, err := r.Client.Repositories.UpdateFile(ctx, r.Repository.GetOwner().GetLogin(), r.Repository.GetName(), entry.GetPath(), &github.RepositoryContentFileOptions{
-				// 	Message: github.String("Release"),
-				// 	Content: []byte("hello"),
-				// 	Branch:  github.String("hello"),
-				// 	SHA:     github.String(entry.GetSHA()),
-				// })
-				// if err != nil {
-				// 	r.log.WithError(err).Warn("Failed to update file")
-				// }
 			}
 		}
 	}
@@ -182,7 +185,11 @@ func (r *Releaser) UpdateFile(ctx context.Context, entry *github.TreeEntry, ref 
 	}
 
 	if updateRequired {
-		branchName := fmt.Sprintf("%s-%s", "valet", "hello")
+		branchName := fmt.Sprintf("valet/%s/bump", entry.GetPath())
+		if len(entry.GetPath()) > 50 {
+			branchName = fmt.Sprintf("valet/%s/bump", entry.GetPath()[len(entry.GetPath())-50:])
+		}
+
 		_, _, err := r.Client.Git.CreateRef(ctx, r.Repository.GetOwner().GetLogin(), r.Repository.GetName(), &github.Reference{
 			Ref: github.String(fmt.Sprintf("heads/%s", branchName)),
 			Object: &github.GitObject{
@@ -193,7 +200,7 @@ func (r *Releaser) UpdateFile(ctx context.Context, entry *github.TreeEntry, ref 
 			return errors.Wrap(err, "Failed to create ref")
 		}
 		_, _, err = r.Client.Repositories.UpdateFile(ctx, r.Repository.GetOwner().GetLogin(), r.Repository.GetName(), entry.GetPath(), &github.RepositoryContentFileOptions{
-			Message: github.String("Valet update"),
+			Message: github.String(fmt.Sprintf("Bump chart in %s", entry.GetPath())),
 			Content: buf.Bytes(),
 			Branch:  &branchName,
 			SHA:     entry.SHA,
@@ -202,7 +209,7 @@ func (r *Releaser) UpdateFile(ctx context.Context, entry *github.TreeEntry, ref 
 			return errors.Wrap(err, "Failed to update file")
 		}
 		_, _, err = r.Client.PullRequests.Create(ctx, r.Repository.GetOwner().GetLogin(), r.Repository.GetName(), &github.NewPullRequest{
-			Title: github.String("Valet update"),
+			Title: github.String(fmt.Sprintf("Bump chart in %s", entry.GetPath())),
 			Head:  github.String(branchName),
 			Base:  ref.Ref,
 		})
@@ -216,9 +223,12 @@ func (r *Releaser) UpdateFile(ctx context.Context, entry *github.TreeEntry, ref 
 
 var ErrNotAutomated = errors.New("Not an automated release")
 
-var filterChart = regexp.MustCompile(`^filter.valet.io/chart$`) // filterRegex   = regexp.MustCompile(`^filter.valet.io/(.+)$`)
-// registryRegex = regexp.MustCompile(`^registry.valet.io/(.+)$`)
-// tagRegex      = regexp.MustCompile(`^tag.valet.io/(.+)$`)
+var (
+	filterChart   = regexp.MustCompile(`^filter.valet.io/chart$`)
+	filterRegex   = regexp.MustCompile(`^filter.valet.io/(.+)$`)
+	registryRegex = regexp.MustCompile(`^registry.valet.io/(.+)$`)
+	tagRegex      = regexp.MustCompile(`^tag.valet.io/(.+)$`)
+)
 
 type updateRule struct{}
 
@@ -231,39 +241,76 @@ func (r *Releaser) UpdateDocument(ctx context.Context, doc *gabs.Container) (*ga
 		return nil, ErrNotAutomated
 	}
 
-	// filter, _ := semver.NewConstraint(">=0.0.0")
+	con, _ := semver.NewConstraint(">=0.0.0")
 
 	for key, value := range doc.Search("metadata", "annotations").ChildrenMap() {
 		if filterChart.MatchString(key) {
-			r.log.Infof("Found filter for chart %s", value)
-			// semver.NewConstraint(value)
+			str, ok := value.Data().(string)
+			if !ok {
+				return nil, errors.New("Invalid filter type")
+			}
+
+			r.log.Infof("Found filter for chart %s", str)
+
+			vals := strings.SplitN(str, ":", 2)
+			if len(vals) != 2 {
+				return nil, errors.Errorf("Invalid filter %s", str)
+			}
+
+			switch vals[0] {
+			case "semver":
+				var err error
+				con, err = semver.NewConstraint(vals[1])
+				if err != nil {
+					return nil, errors.Wrap(err, "Failed to parse constraint")
+				}
+			default:
+				return nil, errors.Errorf("Unknown filter type %s", vals[0])
+			}
 			continue
 		}
-		// if matches := filterRegex.FindStringSubmatch(key); len(matches) != 0 {
-		// 	r.log.Infof("Found filter for %s with annotation %s and value", matches[1], matches[0], value)
-		// 	continue
-		// }
-		// if matches := registryRegex.FindStringSubmatch(key); len(matches) != 0 {
-		// 	r.log.Infof("Found registry for %s with annotation %s and value", matches[1], matches[0], value)
-		// 	continue
-		// }
-		// if matches := tagRegex.FindStringSubmatch(key); len(matches) != 0 {
-		// 	r.log.Infof("Found tag for %s with annotation %s and value", matches[1], matches[0], value)
-		// 	continue
-		// }
 	}
 
-	currentVersion, ok := doc.Search("spec", "chart", "version").Data().(string)
+	name, ok := doc.Search("spec", "chart", "name").Data().(string)
 	if !ok {
-		return nil, errors.New("Failed to get current version")
+		return nil, errors.New("Failed to get chart name")
+	}
+	repo, ok := doc.Search("spec", "chart", "repository").Data().(string)
+	if !ok {
+		return nil, errors.New("Failed to get chart repository")
+	}
+	currVersion, ok := doc.Search("spec", "chart", "version").Data().(string)
+	if !ok {
+		return nil, errors.New("Failed to get chart version")
 	}
 
-	vers, err := semver.NewVersion(currentVersion)
+	oldV, err := semver.NewVersion(currVersion)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to parse version")
+		return nil, errors.Wrap(err, "Failed to current version")
 	}
 
-	doc.Set(vers.IncPatch().String(), "spec", "chart", "version")
+	available, err := r.chartService.ListVersions(ctx, repo, name)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to list available chart versions")
+	}
+
+	v := oldV
+	for _, version := range available {
+		v2, err := semver.NewVersion(version)
+		if err != nil {
+			r.log.WithError(err).Warnf("Failed to parse version %s", version)
+			continue
+		}
+		if v2.GreaterThan(v) && con.Check(v2) {
+			v = v2
+		}
+	}
+
+	if v.Equal(oldV) {
+		return nil, errors.New("No new version found")
+	}
+
+	doc.Set(v.String(), "spec", "chart", "version")
 
 	return doc, nil
 }

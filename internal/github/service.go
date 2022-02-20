@@ -6,14 +6,15 @@ import (
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v42/github"
+	"github.com/paulfarver/valet/internal/chart"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
 type Service struct {
-	atr    *ghinstallation.AppsTransport
-	config Config
-	log    logrus.FieldLogger
+	atr          *ghinstallation.AppsTransport
+	config       Config
+	chartService chart.Service
 }
 
 type Config struct {
@@ -22,16 +23,16 @@ type Config struct {
 	ReleaseConfigPath string `mapstructure:"releaseConfig"`
 }
 
-func NewService(conf Config, logger *logrus.Logger) (*Service, error) {
+func NewService(conf Config, chartService chart.Service) (*Service, error) {
 	atr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, conf.AppID, []byte(conf.PrivateKeyPem))
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to create ghinstallation.AppsTransport")
 	}
 
 	return &Service{
-		atr:    atr,
-		config: conf,
-		log:    logger.WithField("subsystem", "github"),
+		atr:          atr,
+		config:       conf,
+		chartService: chartService,
 	}, nil
 }
 
@@ -64,7 +65,7 @@ func (s *Service) FullScan(ctx context.Context) ([]*github.Repository, error) {
 	return repositories, nil
 }
 
-func (s *Service) GetReleasers(ctx context.Context, installation *github.Installation) ([]*Releaser, error) {
+func (s *Service) GetReleasers(ctx context.Context, installation *github.Installation, l logrus.FieldLogger) ([]*Releaser, error) {
 	transport := ghinstallation.NewFromAppsTransport(s.atr, installation.GetID())
 	client := github.NewClient(&http.Client{Transport: transport})
 	response, _, err := client.Apps.ListRepos(ctx, nil)
@@ -73,9 +74,9 @@ func (s *Service) GetReleasers(ctx context.Context, installation *github.Install
 	}
 	releasers := []*Releaser{}
 	for _, repo := range response.Repositories {
-		releaser, err := s.NewReleaser(ctx, client, repo, s.log)
+		releaser, err := s.NewReleaser(ctx, client, repo, l, s.chartService)
 		if err != nil {
-			s.log.WithError(err).WithField("repo", repo.GetFullName()).Warn("Failed to create releaser")
+			l.WithError(err).WithField("repo", repo.GetFullName()).Warn("Failed to create releaser")
 			continue
 		}
 		releasers = append(releasers, releaser)
@@ -92,17 +93,18 @@ func (s *Service) ScanInstallation(ctx context.Context, client *github.Client) (
 	return repos.Repositories, nil
 }
 
-func (s *Service) ScheduleImageUpdates(ctx context.Context) error {
+func (s *Service) ScheduleImageUpdates(ctx context.Context, l logrus.FieldLogger) error {
 	installations, err := s.ListInstallations(ctx)
 	if err != nil {
 		return errors.Wrap(err, "Failed to list installations")
 	}
 
+	// TODO: dispatch to a worker pool
 	releasers := []*Releaser{}
 	for _, installation := range installations {
-		rel, err := s.GetReleasers(ctx, installation)
+		rel, err := s.GetReleasers(ctx, installation, l)
 		if err != nil {
-			s.log.WithError(err).WithField("installation", installation.GetID()).Warn("Failed to create releasers")
+			l.WithError(err).WithField("installation", installation.GetID()).Warn("Failed to create releasers")
 			continue
 		}
 		releasers = append(releasers, rel...)
@@ -110,11 +112,6 @@ func (s *Service) ScheduleImageUpdates(ctx context.Context) error {
 
 	for _, releaser := range releasers {
 		releaser.ScanAndUpdate(ctx)
-
-		// err := releaser.ScheduleImageUpdates(ctx)
-		// if err != nil {
-		// 	s.log.WithError(err).WithField("releaser", releaser.GetName()).Warn("Failed to schedule image updates")
-		// }
 	}
 
 	return nil

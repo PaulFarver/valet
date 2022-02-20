@@ -38,7 +38,7 @@ func Register(g *echo.Group, l *logrus.Logger, svc *github.Service) {
 	})
 
 	g.POST("/webhook", func(c echo.Context) error {
-		err := svc.ScheduleImageUpdates(c.Request().Context())
+		err := svc.ScheduleImageUpdates(c.Request().Context(), l)
 		if err != nil {
 			l.WithError(err).Error("Failed to schedule image updates")
 
